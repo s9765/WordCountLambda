@@ -5,146 +5,197 @@ using Amazon.S3.Model;
 using Newtonsoft.Json;
 using NUnit.Framework;
 using NUnit.Framework.Internal.Execution;
+using System.IO;
+using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 
-// Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
 namespace WordCountLamda;
 
 public class Function
 {
-
-    //private readonly IAmazonS3 _s3Client;
-
-    //public Function()
-    //{
-    //    _s3Client = new AmazonS3Client();
-    //}
-
-    //public async Task FunctionHandler(S3Event evnt, ILambdaContext context)
-    //{
-    //    foreach (var record in evnt.Records)
-    //    {
-    //        var bucketName = record.S3.Bucket.Name;
-    //        var objectKey = record.S3.Object.Key;
-
-    //        try
-    //        {
-    //            var text = await ReadObjectFromS3Async(bucketName, objectKey);
-    //            var wordCount = CountWords(text);
-    //            var json = JsonConvert.SerializeObject(wordCount);
-
-    //            var jsonKey = objectKey.Substring(0, objectKey.LastIndexOf('.')) + ".json";
-
-    //            await UploadObjectToS3Async(json, bucketName, jsonKey);
-    //        }
-    //        catch (Exception ex)
-    //        {
-    //            context.Logger.LogLine($"Error processing object {objectKey} from bucket {bucketName}. {ex.Message}");
-    //        }
-    //    }
-    //}
-
-    //private async Task<string> ReadObjectFromS3Async(string bucketName, string objectKey)
-    //{
-    //    var request = new GetObjectRequest
-    //    {
-    //        BucketName = bucketName,
-    //        Key = objectKey
-    //    };
-
-    //    using (var response = await _s3Client.GetObjectAsync(request))
-    //    using (var responseStream = response.ResponseStream)
-    //    using (var reader = new StreamReader(responseStream))
-    //    {
-    //        return await reader.ReadToEndAsync();
-    //    }
-    //}
-
-    //private async Task UploadObjectToS3Async(string text, string bucketName, string objectKey)
-    //{
-    //    var request = new PutObjectRequest
-    //    {
-    //        BucketName = bucketName,
-    //        Key = objectKey,
-    //        ContentBody = text
-    //    };
-
-    //    await _s3Client.PutObjectAsync(request);
-    //}
-
-    //private Dictionary<string, int> CountWords(string text)
-    //{
-    //    var wordCount = new Dictionary<string, int>();
-    //    var words = Regex.Matches(text, @"[\w']+");
-
-    //    foreach (Match word in words)
-    //    {
-    //        var wordStr = word.Value.ToLower();
-    //        if (wordCount.ContainsKey(wordStr))
-    //            wordCount[wordStr]++;
-    //        else
-    //            wordCount[wordStr] = 1;
-    //    }
-
-    //    return wordCount;
-    //}
-
     private readonly IAmazonS3 _s3Client;
 
     public Function()
     {
         _s3Client = new AmazonS3Client();
     }
+    /// <summary>
+    /// Saves in s3 bucket how many words are mapped in the file of the routing you receive and how many times each word appears
+    /// </summary>
+    /// <param name="myFile"></param>
+    /// <param name="context"></param>
+    /// <returns>If the file already exists returns the contents of the saved file</returns>
+    //public async Task<string> FunctionCounter(string myFile, ILambdaContext context)
+    //{
+    //    // - עובד רק לוקאלי מקבלת ניתוב
+    //    var bucketName = "my-word-count-bucket";
+    //    FileStream fs = new FileStream(myFile,
+    //                                   FileMode.Open,
+    //                                   FileAccess.Read);
 
-    public async Task<string> FunctionHandler(string text, ILambdaContext context)
+    //    StreamReader reader = new StreamReader(fs);
+    //    string fileName = Path.GetFileName(myFile);
+    //    string[] parts = fileName.Split('.');
+    //    string fileNameWithoutExtension = parts[0];
+    //    string str = reader.ReadToEnd();
+
+    //    try
+    //    {
+    //        var exisitingFile = await DoesObjectExist(bucketName, fileNameWithoutExtension + ".json");
+    //        if (exisitingFile != "not exisit")
+    //        {
+    //            context.Logger.LogLine($"the file exists");
+    //            return exisitingFile;
+    //        }
+    //        var json = GenerateWordCountJson(str);
+    //        await UploadFileToS3Async(json, bucketName, fileNameWithoutExtension + ".json");
+    //        return $"Text uploaded successfully to s3://{bucketName}/{fileNameWithoutExtension}";
+    //    }
+    //    catch (Exception ex)
+    //    {
+    //        context.Logger.LogLine($"Error uploading text to S3. {ex.Message}");
+    //        return $"Error uploading text to S3. {ex.Message}";
+    //    }
+
+    //    return str;
+
+    //}
+    /// <summary>
+    ///If myFile exisits in my-word-count-bucket-
+    ///this function uploads to my-word-count-bucket a JSON file containing the number of words and how many times each word appears in myFile
+    ///otherwise warns of an error
+    /// </summary>
+    /// <param name="myFile"></param>
+    /// <param name="context"></param>
+    /// <returns>Returns an appropriate message if it succeeded in loading a cube or if it failed</returns>
+    public async Task<string> FunctionCounter(string myFile, ILambdaContext context)
     {
-        var bucketName = "my-word-count-bucket"; // Replace with your bucket name
-        var objectKey = GenerateObjectKey();
-        var sb = new StringBuilder(text);
+
+        var bucketName = "my-word-count-bucket";
 
         try
         {
-            await UploadFileToS3Async(text, bucketName, objectKey+".txt");
-            var json = GenerateWordCountJson(sb);
-            await UploadFileToS3Async(json, bucketName, objectKey+".json");
-            return $"Text uploaded successfully to s3://{bucketName}/{objectKey}";
+            var text = await getText(bucketName, myFile, context);
+            var json = GenerateWordCountJson(text);
+            string[] parts = myFile.Split('.');
+            string fileNameWithoutExtension = parts[0];
+            await UploadFileToS3Async(json, bucketName, fileNameWithoutExtension + ".json");
+            return $"Text uploaded successfully to s3://{bucketName}/{fileNameWithoutExtension}";
         }
         catch (Exception ex)
         {
             context.Logger.LogLine($"Error uploading text to S3. {ex.Message}");
-            throw;
+            return $"Error uploading text to S3. {ex.Message}";
+        }
+    }
+    /// <summary>
+    /// check if the file exisits in my-word-count-bucket
+    /// </summary>
+    /// <param name="bucketName"></param>
+    /// <param name="objectKey"></param>
+    /// <param name="content"></param>
+    /// <returns>is exisit return the content if not exisit return not exisits</returns>
+    private async Task<string> DoesObjectExist(string bucketName, string fileName)
+    {
+        try
+        {
+            GetObjectRequest request = new GetObjectRequest
+            {
+                BucketName = bucketName,
+                Key = fileName
+            };
+
+            GetObjectResponse response = await _s3Client.GetObjectAsync(request);
+
+            using (StreamReader reader = new StreamReader(response.ResponseStream))
+            {
+                string existingContent = await reader.ReadToEndAsync();
+                return existingContent;
+            }
+        }
+        catch (AmazonS3Exception ex)
+        {
+            if (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                return "not exisit"; // Object doesn't exist
+            }
+            throw; 
         }
     }
 
 
-    private async Task UploadFileToS3Async(string text, string bucketName, string objectKey)
+    /// <summary>
+    /// Get the text of myfile from my-word-count-bucket
+    /// </summary>
+    /// <param name="bucketName"></param>
+    /// <param name="myFile"></param>
+    /// <param name="context"></param>
+    /// <returns>if myFile exists in my-word-count-bucket return the text </returns>
+    private async Task<string> getText(string bucketName, string myFile, ILambdaContext context)
+    {
+        try
+        {
+            GetObjectRequest request = new GetObjectRequest
+            {
+                BucketName = bucketName,
+                Key = myFile
+            };
+
+            GetObjectResponse response = await _s3Client.GetObjectAsync(request);
+
+            using (StreamReader reader = new StreamReader(response.ResponseStream))
+            {
+                string existingContent = await reader.ReadToEndAsync();
+                return existingContent;
+            }
+        }
+        catch (AmazonS3Exception ex)
+        {
+            if (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                context.Logger.LogLine($"Pleas uplaod the file to my-word-count-bucket");
+
+                throw; // Object doesn't exist
+            }
+            throw; 
+        }
+    }
+    /// <summary>
+    /// Upload file to s3 bucket
+    /// </summary>
+    /// <param name="text"></param>
+    /// <param name="bucketName"></param>
+    /// <param name="myFile"></param>
+    /// <returns>Task</returns>
+    private async Task UploadFileToS3Async(string text, string bucketName, string myFile)
     {
         var request = new PutObjectRequest
         {
             BucketName = bucketName,
-            Key = objectKey,
+            Key = myFile,
             ContentBody = text
         };
 
         await _s3Client.PutObjectAsync(request);
     }
-    public string GenerateWordCountJson(StringBuilder text)
+    /// <summary>
+    /// Creates a file containing the number of words in the text and how many times each word appears
+    /// </summary>
+    /// <param name="text"></param>
+    /// <returns> Tth JSON File</returns>
+    public string GenerateWordCountJson(string text)
     {
         try
         {
-            return "";
-            // Split the text into words and count their occurrences
             var wordCount = new Dictionary<string, int>();
 
-            // Split the text into words based on whitespace characters
             string[] words = text.ToString().Split(new char[] { ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries);
 
             foreach (string word in words)
             {
-                // Convert the word to lowercase and remove any leading or trailing whitespace
                 string trimmedWord = word.Trim().ToLower();
 
                 if (wordCount.ContainsKey(trimmedWord))
@@ -157,20 +208,16 @@ public class Function
                 }
             }
 
-            // Convert the word count dictionary to JSON
             return JsonConvert.SerializeObject(wordCount);
         }
         catch (Exception)
         {
-
+            throw;
         }
 
-        return "";
     }
-    private string GenerateObjectKey()
-    {
-        // Generate a unique object key based on current timestamp
-        return $"text_{DateTime.UtcNow:yyyyMMddHHmmss}";
-    }
-
 }
+
+
+
+
